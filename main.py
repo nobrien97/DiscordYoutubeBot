@@ -15,7 +15,10 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0' # bind to ipv4 since ipv6 addresses cause issues sometimes
+    'source_address': '0.0.0.0', # bind to ipv4 since ipv6 addresses cause issues sometimes
+    'force-ipv4': True,
+    'cachedir': False
+
 }
 
 ffmpeg_options = {
@@ -49,6 +52,7 @@ class YT(commands.Cog):
         self.bot = bot
 
     YTqueue = []
+    curPlaying = lambda: None
 
     @commands.command()
     async def join(self , ctx, *, channel: discord.VoiceChannel):
@@ -59,18 +63,24 @@ class YT(commands.Cog):
         return await channel.connect()
 
     @commands.command()
-    async def ytp(self, ctx, *, url):
+    async def play(self, ctx, *, url):
         """ Stream audio from URL """
         async with ctx.typing():
             player = await YTDLDownloader.from_url(url, loop = self.bot.loop, stream=True)
-            ctx.voice_client.play(player, after = lambda e: print('Player error: %s' % e) if e else self.next(ctx) if len(self.YTqueue) else None)
-
-        await ctx.send('Now playing: {}'.format(player.title))
+            if player.__class__ == "https":
+                return await ctx.send('Failed to play track (403). Try again.')
+            self.YTqueue.insert(0, player)
+            await self.next(ctx)
+            # ctx.voice_client.play(player, after = lambda e: print('Player error: %s' % e) if e else self.next(ctx) if len(self.YTqueue) else None)
+        # await ctx.send('Now playing: {}'.format(player.title))
 
     @commands.command()
-    async def ytq(self, ctx, *, url):
+    async def queue(self, ctx, *, url):
         """ Add track to the queue """
-        data = await YTDLDownloader.from_url(url, loop = self.bot.loop, stream=True)
+        try:
+            data = await YTDLDownloader.from_url(url, loop = self.bot.loop, stream=True)
+        except:
+            return await ctx.send('Failed to add track to the queue. Try again.')
         self.YTqueue.append(data)
         await ctx.send('Added {} to the queue'.format(data.title))
         if (ctx.voice_client.is_playing() is False):
@@ -85,8 +95,9 @@ class YT(commands.Cog):
         if len(self.YTqueue) > 0:
             async with ctx.typing():
                 player = self.YTqueue[0]
+                self.curPlaying = player
                 self.YTqueue.pop(0)
-                ctx.voice_client.play(player, after = lambda e: print('Player error: %s' % e) if e else self.next(ctx) if len(self.YTqueue) else None)
+                ctx.voice_client.play(player, after = lambda e: print('Player error: %s' % e) if e else asyncio.run_coroutine_threadsafe(self.next(ctx), self.bot.loop).result() if len(self.YTqueue) else None)
             await ctx.send('Now playing: {}'.format(player.title))
         else:
             await ctx.send("Nothing left in the queue!")
@@ -96,7 +107,7 @@ class YT(commands.Cog):
         """List the queue"""
         if len(self.YTqueue) > 0:
             async with ctx.typing():
-                itemsList = []
+                itemsList = [self.curPlaying.title] if ctx.voice_client.is_playing() else []
                 for item in self.YTqueue:
                     itemsList.append(item.title)
                 await ctx.send(itemsList)
@@ -142,8 +153,8 @@ class YT(commands.Cog):
         await ctx.send(
             """Commands:
             Prefix each with a !
-            ytp <url>       : Wail audio from a YouTube(tm) link RIGHT NOW 4head
-            ytq <url>       : Add a track to the queue
+            play <url>      : Wail audio from a YouTube(tm) link RIGHT NOW 4head
+            queue <url>     : Add a track to the queue
             stop            : The goat wails no more
             volume <int>    : Makes the goat wail louder
             next            : Wail the next track in the queue
@@ -152,7 +163,7 @@ class YT(commands.Cog):
             lq              : Have a look at what the goat holds in store
             """)
 
-    @ytp.before_invoke
+    @play.before_invoke
     async def ensure_voice(self, ctx):
         if ctx.voice_client is None:
             if ctx.author.voice:
@@ -163,7 +174,7 @@ class YT(commands.Cog):
         elif ctx.voice_client.is_playing():
             ctx.voice_client.stop()
     
-    @ytq.before_invoke
+    @queue.before_invoke
     @lq.before_invoke
     @pause.before_invoke
     @next.before_invoke
